@@ -1,0 +1,15 @@
+{
+    "name": "typo3/jobqueue-rabbitmq",
+    "type": "typo3-flow-package",
+    "description": "Add description here",
+    "require": {
+		"typo3/flow": "*",
+		"videlalvaro/php-amqplib": "2.4.0",
+		"typo3/jobqueue-common": "@dev"
+    },
+    "autoload": {
+        "psr-0": {
+            "TYPO3\\Jobqueue\\Rabbitmq": "Classes"
+        }
+    }
+}
