@@ -1,0 +1,20 @@
+TYPO3:
+  Flow:
+    object:
+      #exclude phpamqplib from reflection because the Tests are not namespaced and mess things up.
+      excludeClasses:
+        'videlalvaro.phpamqplib': ['.*']
+
+  # These are the settings that must be set to use TYPO3.Jobqueue.Rabbitmq
+  #Jobqueue:
+    #Common:
+      #queues:
+        #name.of.queue:
+          #className: 'TYPO3\Jobqueue\Rabbitmq\Queue\RabbitmqWorkQueue'
+          #options:
+            #client:
+              #host: '127.0.0.1'
+              #port: '5672'
+              #username: 'guest'
+              #password: 'guest'
+              #vhost: '/'
