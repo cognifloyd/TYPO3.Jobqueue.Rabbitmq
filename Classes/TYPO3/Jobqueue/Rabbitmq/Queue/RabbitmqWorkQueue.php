@@ -25,57 +25,19 @@ use TYPO3\Jobqueue\Common\Queue\QueueInterface;
  * There are other kinds of queues, this is a Work Queue as explained here:
  * http://www.rabbitmq.com/tutorials/tutorial-two-php.html
  */
-class RabbitmqWorkQueue implements QueueInterface {
-
-	/**
-	 * The name of the work queue
-	 * @var string
-	 */
-	protected $name;
-
-	/**
-	 * This AMQP connection is the main RabbitMQ entry point.
-	 * Uses LazyConnection to postpone connection until it's actually used.
-	 * @var AMQPLazyConnection
-	 */
-	protected $connection;
-
-	/**
-	 * The current AMQP data channel
-	 * @var AMQPChannel
-	 */
-	protected $channel;
+class RabbitmqWorkQueue extends AbstractRabbitmqQueue implements QueueInterface {
 
 	/**
 	 * Constructor:
 	 * Create a connect to RabbitMQ and ensure that the named queue exists.
 	 * If the queue already exists, it must be persistent (durable & no auto_delete)
 	 *
-	 * @param string $name The name of the work queue to put work in or get work from
-	 * @param array $options Connection options array
+	 * @param string $name    The name of the work queue to put work in or get work from
+	 * @param array  $options Connection options array
 	 */
 	public function __construct($name, array $options = array()) {
-		$this->name = $name;
-
-		// Awkward, but standard way of getting options with TYPO3.JobQueue.*
-		$clientOptions = isset($options['client']) ? $options['client'] : array();
-		$host = isset($clientOptions['host']) ? $clientOptions['host'] : 'localhost';
-		$port = isset($clientOptions['port']) ? $clientOptions['port'] : '5672';
-		$username = isset($clientOptions['username']) ? $clientOptions['username'] : 'guest';
-		$password = isset($clientOptions['password']) ? $clientOptions['password'] : 'guest';
-		$vhost = isset($clientOptions['vhost']) ? $clientOptions['vhost'] : '/';
-
-		$this->connection = new AMQPLazyConnection($host, $port, $username, $password, $vhost);
-		$this->channel = $this->connection->channel();
-		$this->channel->queue_declare($this->name, false, true, false, false);
-	}
-
-	/**
-	 * Cleanly close the connection.
-	 */
-	public function __destruct() {
-		$this->channel->close();
-		$this->connection->close();
+		parent::__construct($name,$options);
+		$this->channel->queue_declare($this->name, FALSE, TRUE, FALSE, FALSE);
 	}
 
 	/**
@@ -112,9 +74,9 @@ class RabbitmqWorkQueue implements QueueInterface {
 		$this->channel->confirm_select();
 
 		$this->channel->basic_publish(
-			$amqpMessage, #msg
-			'',           #exchange
-			$this->name   #routing_key (queue)
+			$amqpMessage,    #msg
+			$this->exchange, #exchange
+			$this->name      #routing_key (queue)
 			#mandatory=false (not implemented)
 			#immediate=false (not implemented)
 			#ticket (deprecated in AMQP 0-9-1)
