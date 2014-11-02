@@ -19,4 +19,22 @@ use TYPO3\Flow\Annotations as Flow;
  */
 class RabbitmqPubSubQueue extends AbstractRabbitmqQueue {
 
+	/**
+	 * Constructor:
+	 * Create a connect to RabbitMQ and ensure that the named queue exists.
+	 * If the queue already exists, it must be persistent (durable & no auto_delete)
+	 *
+	 * @param string $name    The name of the work queue to put work in or get work from
+	 * @param array  $options Connection options array
+	 */
+	public function __construct($name, array $options = array()) {
+		parent::__construct($name, $options);
+		#$this->channel->exchange_declare('logs', 'fanout', FALSE, FALSE, FALSE);
+		#list($queue_name, ,) = $channel->queue_declare("", FALSE, FALSE, TRUE, FALSE);
+		#$channel->queue_bind($queue_name, 'logs');
+		$this->channel->queue_declare($this->name, FALSE, TRUE, FALSE, FALSE);
+
+		//publishing only needs the exchange.
+		//subscribing needs the exchange, the binding, and the queue.
+	}
 }
