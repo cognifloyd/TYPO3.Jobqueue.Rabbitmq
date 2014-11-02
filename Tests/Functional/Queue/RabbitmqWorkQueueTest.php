@@ -29,7 +29,7 @@ class RabbitmqWorkQueueTest extends FunctionalTestCase {
 	protected $queue;
 
 	/**
-	 * Set up dependencies
+	 * Set up dependencies before each test
 	 */
 	public function setUp() {
 		parent::setUp();
@@ -40,83 +40,26 @@ class RabbitmqWorkQueueTest extends FunctionalTestCase {
 		}
 
 		$queueName = 'Test-queue';
-		$connectionOptions = $settings['testing'];
-		$this->queue = new RabbitmqWorkQueue($queueName, $connectionOptions);
+		$this->queue = new RabbitmqWorkQueue($queueName, $settings['testing']);
+		$connectionOptions = $settings['testing']['client'];
 
 		//flush queue
 		$connection = new AMQPConnection($connectionOptions['host'], $connectionOptions['port'], $connectionOptions['username'], $connectionOptions['password'], $connectionOptions['vhost']);
 		$channel = $connection->channel();
 		$channel->queue_declare($queueName, false, true, false, false);
 		$channel->queue_purge($queueName);
+		$channel->close();
+		$connection->close();
+
 	}
 
 	/**
-	 * @test
+	 * Tear down the queue after each test
 	 */
-	public function publishAndWaitWithMessageWorks() {
-		$message = new Message('Yeah, tell someone it works!');
-		$this->queue->publish($message);
-
-		$result = $this->queue->waitAndTake(1);
-		$this->assertNotNull($result, 'wait should receive message');
-		$this->assertEquals($message->getPayload(), $result->getPayload(), 'message should have payload as before');
-	}
-
-	/**
-	 * @test
-	 */
-	public function waitForMessageTimesOut() {
-		$result = $this->queue->waitAndTake(1);
-		$this->assertNull($result, 'wait should return NULL after timeout');
-	}
-
-	/**
-	 * @test
-	 */
-	public function peekReturnsNextMessagesIfQueueHasMessages() {
-		$message = new Message('First message');
-		$this->queue->publish($message);
-		$message = new Message('Another message');
-		$this->queue->publish($message);
-
-		$results = $this->queue->peek(1);
-		$this->assertEquals(1, count($results), 'peek should return a message');
-		/** @var Message $result */
-		$result = $results[0];
-		$this->assertEquals('First message', $result->getPayload());
-		$this->assertEquals(Message::STATE_PUBLISHED, $result->getState(), 'Message state should be published');
-
-		$results = $this->queue->peek(1);
-		$this->assertEquals(1, count($results), 'peek should return a message again');
-		$result = $results[0];
-		$this->assertEquals('First message', $result->getPayload(), 'second peek should return the same message again');
-	}
-
-	/**
-	 * @test
-	 */
-	public function peekReturnsNullIfQueueHasNoMessage() {
-		$result = $this->queue->peek();
-		$this->assertEquals(array(), $result, 'peek should not return a message');
-	}
-
-	/**
-	 * @test
-	 */
-	public function waitAndReserveWithFinishRemovesMessage() {
-		$message = new Message('First message');
-		$this->queue->publish($message);
-
-
-		$result = $this->queue->waitAndReserve(1);
-		$this->assertNotNull($result, 'waitAndReserve should receive message');
-		$this->assertEquals($message->getPayload(), $result->getPayload(), 'message should have payload as before');
-
-		$result = $this->queue->peek();
-		$this->assertEquals(array(), $result, 'no message should be present in queue');
-
-		$finishResult = $this->queue->finish($message);
-		$this->assertTrue($finishResult, 'message should be finished');
+	public function tearDown() {
+		$this->queue->__destruct();
+		unset($this->queue);
+		parent::tearDown();
 	}
 
 	/**
@@ -139,10 +82,86 @@ class RabbitmqWorkQueueTest extends FunctionalTestCase {
 		$this->assertSame(2, $this->queue->count());
 	}
 
+	/**
+	 * @test
+	 */
+	public function waitForMessageTimesOut() {
+		$result = $this->queue->waitAndTake(1);
+		$this->assertNull($result, 'wait should return NULL after timeout');
+	}
+
+	/**
+	 * @test
+	 */
+	public function publishAndWaitWithMessageWorks() {
+		$message = new Message('Yeah, tell someone it works!');
+		$this->queue->publish($message);
+
+		$result = $this->queue->waitAndTake(1);
+		$this->assertNotNull($result, 'wait should receive message');
+		$this->assertEquals($message->getPayload(), $result->getPayload(), 'message should have payload as before');
+	}
+
+	/**
+	 * @test
+	 */
+	public function peekReturnsAnEmptyArrayIfQueueHasNoMessage() {
+		$result = $this->queue->peek();
+		$this->assertEquals(array(), $result, 'peek should not return a message');
+	}
+
+	/**
+	 * @test
+	 */
+	public function peekReturnsNextMessagesIfQueueHasMessages() {
+		$message = new Message('First message');
+		$this->queue->publish($message);
+		$message = new Message('Another message');
+		$this->queue->publish($message);
+
+		$results = $this->queue->peek(1);
+		$this->assertEquals(1, count($results), 'peek should return a message');
+		/** @var Message $result */
+		$result = $results[0];
+		$this->assertEquals('First message', $result->getPayload());
+		$this->assertEquals(Message::STATE_PUBLISHED, $result->getState(), 'Message state should be published');
+
+		$results = $this->queue->peek(1);
+		$this->assertEquals(1, count($results), 'peek should return a message again');
+		$result = $results[0];
+		$this->assertEquals('First message', $result->getPayload(), 'second peek should return the same message again');
+
+		$results = $this->queue->peek(2);
+		$this->assertEquals(2, count($results), 'peek should return two messages with two message limit');
+		$result = $results[0];
+		$this->assertEquals('First message', $result->getPayload(), 'peeking two messages should show the first message first');
+		$result = $results[1];
+		$this->assertEquals('Another message', $result->getPayload(), 'peeking two messages should show the second message second');
+	}
+
+	/**
+	 * @test
+	 */
+	public function waitAndReserveWithFinishRemovesMessage() {
+		$initialMessage = new Message('First message');
+		$this->queue->publish($initialMessage);
+
+		$resultMessage = $this->queue->waitAndReserve(1);
+		$this->assertNotNull($resultMessage, 'waitAndReserve should receive message');
+		$this->assertEquals($initialMessage->getPayload(), $resultMessage->getPayload(), 'message should have payload as before');
+
+		$emptyResult = $this->queue->peek();
+		$this->assertEquals(array(), $emptyResult, 'no message should be present in queue');
+
+		$finishResult = $this->queue->finish($resultMessage);
+		$this->assertTrue($finishResult, 'message should be finished');
+	}
+
 //	/**
 //	 * @test
 //	 */
 //	public function identifierMakesMessagesUnique() {
+//		$this->markTestSkipped('RabbitMQ Does not support unique message publishing.');
 //		$message = new Message('Yeah, tell someone it works!', 'test.message');
 //		$identicalMessage = new Message('Yeah, tell someone it works!', 'test.message');
 //		$this->queue->publish($message);

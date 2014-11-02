@@ -4,9 +4,9 @@ TYPO3:
       testing:
         # Set to TRUE to enable functional testing against a rabbitmq server
         enabled: TRUE
-          client:
-            host: '127.0.0.1'
-            port: '5672'
-            username: 'guest'
-            password: 'guest'
-            vhost: '/'
+        client:
+          host: '127.0.0.1'
+          port: '5672'
+          username: 'guest'
+          password: 'guest'
+          vhost: '/'

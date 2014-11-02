@@ -11,13 +11,11 @@ namespace TYPO3\Jobqueue\Rabbitmq\Queue;
  * The TYPO3 project - inspiring people to share!                         *
  *                                                                        */
 
-
 use PhpAmqpLib\Channel\AMQPChannel;
-use PhpAmqpLib\Connection\AMQPConnection;
 use PhpAmqpLib\Connection\AMQPLazyConnection;
-use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Exception\AMQPTimeoutException;
+use PhpAmqpLib\Message\AMQPMessage;
 use TYPO3\Flow\Annotations as Flow;
-use TYPO3\Jobqueue\Common\Exception as JobqueueException;
 use TYPO3\Jobqueue\Common\Queue\Message;
 use TYPO3\Jobqueue\Common\Queue\QueueInterface;
 
@@ -37,8 +35,8 @@ class RabbitmqWorkQueue implements QueueInterface {
 
 	/**
 	 * This AMQP connection is the main RabbitMQ entry point.
-	 * @var AMQPConnection
-	 * @todo look at switching to AMQPLazyConnection
+	 * Uses LazyConnection to postpone connection until it's actually used.
+	 * @var AMQPLazyConnection
 	 */
 	protected $connection;
 
@@ -67,7 +65,7 @@ class RabbitmqWorkQueue implements QueueInterface {
 		$password = isset($clientOptions['password']) ? $clientOptions['password'] : 'guest';
 		$vhost = isset($clientOptions['vhost']) ? $clientOptions['vhost'] : '/';
 
-		$this->connection = new AMQPConnection($host, $port, $username, $password, $vhost);
+		$this->connection = new AMQPLazyConnection($host, $port, $username, $password, $vhost);
 		$this->channel = $this->connection->channel();
 		$this->channel->queue_declare($this->name, false, true, false, false);
 	}
@@ -82,29 +80,63 @@ class RabbitmqWorkQueue implements QueueInterface {
 
 	/**
 	 * Publish a message to the queue
-	 * The state of the message will be updated according
-	 * to the result of the operation.
-	 * If the queue supports unique messages, the message should not be queued if
-	 * another message with the same identifier already exists.
+	 * The state of the message will be updated according to the result of the operation.
+	 *
+	 * This implementation does not support setting $message->identifier before or when publishing.
+	 * $message-identifier is only set when using waitAndReserve() or waitAndTake().
+	 * Do not try to finish() a Message that was used to publish it. Publish and discard!
 	 *
 	 * @param Message $message
 	 * @return string The identifier of the message under which it was queued
 	 * @todo rename to submit()
 	 */
 	public function publish(Message $message) {
+		$jsonData = $this->encodeMessage($message);
+		$amqpMessage = new AMQPMessage(
+			$jsonData,
+			array(
+				'delivery_mode' => 2, # make message persistent
+				'content_type' => 'application/json'
+			));
 
+		/*
+		 * confirm_select avoids a race condition.
+		 * In tests, getting the count of messages immediately after publishing a message
+		 * sometimes counts the messages *before* the published message actually gets published
+		 * causing the count to be incorrect. confirm_select makes sure that publish succeeds before
+		 * continuing.
+		 *
+		 * At some point, if someone wants this to be a hair faster, then there should be some option
+		 * to disable confirm_select, but that might involve an API change for all jobqueue packages.
+		 */
+		$this->channel->confirm_select();
+
+		$this->channel->basic_publish(
+			$amqpMessage, #msg
+			'',           #exchange
+			$this->name   #routing_key (queue)
+			#mandatory=false (not implemented)
+			#immediate=false (not implemented)
+			#ticket (deprecated in AMQP 0-9-1)
+		);
+
+		//RabbitMQ can't provide an id at this point, because the id used to ack/nack it is specific to the consumer.
+		//$message->setIdentifier($delivery_tag);
+		$message->setState(Message::STATE_PUBLISHED);
 	}
 
 	/**
 	 * Wait for a message in the queue and remove the message from the queue for processing
 	 * If a non-null value was returned, the message was unqueued. Otherwise a timeout
-	 * occured and no message was available or received.
+	 * occurred and no message was available or received.
 	 *
 	 * @param integer $timeout
 	 * @return Message The received message or NULL if a timeout occurred
 	 */
 	public function waitAndTake($timeout = NULL) {
-
+		$message = $this->consume($timeout, TRUE);
+		!is_null($message) && $message->setState(Message::STATE_DONE);
+		return $message;
 	}
 
 	/**
@@ -119,47 +151,28 @@ class RabbitmqWorkQueue implements QueueInterface {
 	 * @return Message The received message or NULL if a timeout occurred
 	 */
 	public function waitAndReserve($timeout = NULL) {
-
-		$callback = NULL;
-
-		#specify quality of service
-		$this->channel->basic_qos(null,
-							1, #prefetch_count = no more than one message at a time
-							null);
-		$this->channel->basic_consume($this->name, #queuename
-									  '', #consumer_tag
-									  FALSE, #no_local
-									  FALSE, #no_ack
-									  FALSE, #exclusive
-									  FALSE, #nowait
-									  $callback
-									  #ticket
-									  #arguments
-		);
-
-		#$this->channel->basic_get()	 #direct access to a queue; if no message available then return null
-		#$this->channel->basic_consume() #start a queue consumer
-		#$this->channel->basic_recover() #redeliver unacknowledged messages
-		#$this->channel->basic_ack() 	 #acknowledge one or more messages
-		#$this->channel->basic_nack()	 #reject one or several received messages
-		#$this->channel->basic_reject()	 #reject an incoming message
-
-		while(count($this->channel->callbacks)) {
-			$this->channel->wait(null, false, is_null($timeout) ? 0 : $timeout);
-		}
+		$message = $this->consume($timeout);
+		!is_null($message) && $message->setState(Message::STATE_RECEIVED);
+		return $message;
 	}
 
 	/**
 	 * Mark a message as done
 	 *
-	 * This must be called for every message that was reserved and that was
-	 * processed successfully.
+	 * This must be called for every message that was reserved and that was processed successfully.
+	 *
+	 * Note: Other implementations have a way to set $message->identifier on publish, but rabbitmq does not.
+	 * So, you cannot use the Message object you used to publish the message to acknowledge it.
+	 * You can only finish a Message object that was generated by waitAndReserve().
 	 *
 	 * @param Message $message
 	 * @return boolean TRUE if the message could be removed
 	 */
 	public function finish(Message $message) {
-
+		$delivery_tag = $message->getIdentifier();
+		$this->channel->basic_ack($delivery_tag);
+		$message->setState(Message::STATE_DONE);
+		return TRUE;
 	}
 
 	/**
@@ -168,21 +181,47 @@ class RabbitmqWorkQueue implements QueueInterface {
 	 * Inspect the next messages without taking them from the queue. It is not safe to take the messages
 	 * and process them, since another consumer could have received this message already!
 	 *
+	 * Note: Rabbitmq does not support the idea of "peek"ing in a queue.
+	 * This is destructive in between basic_get and basic_nack. Until the message is returned to the queue with basic_nack,
+	 * other clients will get the next message after the message that you are peeking. Only use peek if you really need it.
+	 *
 	 * @param integer $limit
 	 * @return array<\TYPO3\Jobqueue\Common\Queue\Message> The messages up to the length of limit or an empty array if no messages are present currently
 	 */
 	public function peek($limit = 1) {
+		if($this->count() === 0) {
+			return array();
+		}
+		/** @var array<AMQPMessage> $amqpMessages */
+		$amqpMessages = array();
+		for ($i = 1; $i <= $limit; $i++) {
+			$amqpMessages[] = $this->channel->basic_get($this->name);
+		}
 
+		//This approximates the effect of a peek:
+		/** @var AMQPMessage $lastAmqpMessage */
+		$lastAmqpMessage = end($amqpMessages);
+		$this->channel->basic_nack($lastAmqpMessage->delivery_info['delivery_tag'],TRUE,TRUE);
+
+		$messages = array();
+		foreach ($amqpMessages as $amqpMessage) {
+			$message = $this->decodeMessage($amqpMessage->body);
+			$message->setState(Message::STATE_PUBLISHED);
+			$messages[] = $message;
+		}
+
+		return $messages;
 	}
 
 	/**
-	 * Get a message by identifier
+	 * Get a message by identifier (Not supported by RabbitMQ)
 	 *
 	 * @param string $identifier
 	 * @return Message The message or NULL if not present
 	 */
 	public function getMessage($identifier) {
-
+		//not implemented
+		return NULL;
 	}
 
 	/**
@@ -193,6 +232,96 @@ class RabbitmqWorkQueue implements QueueInterface {
 	 * @return integer The number of messages in the queue
 	 */
 	public function count() {
+		$queue_details = $this->channel->queue_declare($this->name,true);
+		/*
+		 * $queue_details[0] is the Queue name
+		 * $queue_details[1] is the message count
+		 * $queue_details[2] is the consumer count
+		 */
+		return (integer) $queue_details[1];
+	}
 
+	/**
+	 * Encode a message
+	 *
+	 * Updates the original value property of the message to resemble the
+	 * encoded representation.
+	 *
+	 * @param Message $message
+	 * @return string
+	 */
+	protected function encodeMessage(Message $message) {
+		$value = json_encode($message->toArray());
+		$message->setOriginalValue($value);
+		return $value;
+	}
+
+	/**
+	 * Decode a message from a string representation
+	 *
+	 * @param string $value
+	 * @return Message
+	 */
+	protected function decodeMessage($value) {
+		$decodedMessage = json_decode($value, TRUE);
+		$message = new Message($decodedMessage['payload']);
+		if (isset($decodedMessage['identifier'])) {
+			$message->setIdentifier($decodedMessage['identifier']);
+		}
+		$message->setOriginalValue($value);
+		return $message;
+	}
+
+	/**
+	 * consume a message
+	 *
+	 * @param integer $timeout
+	 * @param boolean $no_ack If TRUE, immediately remove from queue without finishing it
+	 * @return null|Message
+	 */
+	protected function consume($timeout = NULL, $no_ack = FALSE) {
+		/** @var Message $message */
+		$message = NULL;
+
+		/**
+		 * @param AMQPMessage $amqpMessage
+		 */
+		$callback = function($amqpMessage) use (&$message) {
+			$message = $this->decodeMessage($amqpMessage->body);
+			$message->setIdentifier($amqpMessage->delivery_info['delivery_tag']);
+		};
+
+		#specify quality of service
+		$this->channel->basic_qos(
+			null,
+			1, #prefetch_count = no more than one message at a time
+			null
+		);
+		$consumer_tag = $this->channel->basic_consume(
+			$this->name, #queuename
+			'', #consumer_tag
+			FALSE, #no_local
+			$no_ack, #no_ack
+			FALSE, #exclusive
+			FALSE, #nowait (Setting to TRUE breaks things!)
+			$callback
+			#ticket (deprecated in AMQP 0-9-1)
+			#arguments
+		);
+
+		while(count($this->channel->callbacks)) {
+			try {
+				$this->channel->wait(null, false, is_null($timeout) ? 0 : $timeout);
+			} catch (AMQPTimeoutException $exception) {
+				return NULL;
+			}
+			//If we found a message, stop consuming and return it.
+			if(!is_null($message)) {
+				$this->channel->basic_cancel($consumer_tag);
+				return $message;
+			}
+		}
+
+		return $message;
 	}
 }
