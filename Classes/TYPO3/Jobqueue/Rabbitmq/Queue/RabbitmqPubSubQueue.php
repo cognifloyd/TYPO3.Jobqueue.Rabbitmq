@@ -12,6 +12,8 @@ namespace TYPO3\Jobqueue\Rabbitmq\Queue;
  *                                                                        */
 
 use TYPO3\Flow\Annotations as Flow;
+use TYPO3\Jobqueue\Common\Queue\Message;
+use TYPO3\Jobqueue\Common\Queue\QueueInterface;
 
 /**
  * This Queue focuses on implementing the Publish/Subscribe messaging model
@@ -21,20 +23,75 @@ class RabbitmqPubSubQueue extends AbstractRabbitmqQueue {
 
 	/**
 	 * Constructor:
-	 * Create a connect to RabbitMQ and ensure that the named queue exists.
-	 * If the queue already exists, it must be persistent (durable & no auto_delete)
+	 * Create a connect to RabbitMQ and ensure that the named exchange exists.
+	 * If the exchange already exists, it must be persistent (durable & no auto_delete)
 	 *
-	 * @param string $name    The name of the work queue to put work in or get work from
+	 * Unlike a WorkQueue, the PubSubQueue doesn't work with just one queue.
+	 * It works with a fanout exchange to send messages to more than one queue, including an auto-named queue that is
+	 * this "Queue" subscribes to.
+	 *
+	 * @param string $name    The name of the exchange (not the queue!) where messages are published to
 	 * @param array  $options Connection options array
 	 */
 	public function __construct($name, array $options = array()) {
 		parent::__construct($name, $options);
-		#$this->channel->exchange_declare('logs', 'fanout', FALSE, FALSE, FALSE);
-		#list($queue_name, ,) = $channel->queue_declare("", FALSE, FALSE, TRUE, FALSE);
-		#$channel->queue_bind($queue_name, 'logs');
-		$this->channel->queue_declare($this->name, FALSE, TRUE, FALSE, FALSE);
+		$this->exchange = $name;
+		$durableExchange = isset($options['durableExchange']) ? $options['durableExchange'] : FALSE;
 
-		//publishing only needs the exchange.
-		//subscribing needs the exchange, the binding, and the queue.
+		//Create a fanout exchange that doesn't auto_delete messages
+		$this->channel->exchange_declare($this->exchange, 'fanout', FALSE, $durableExchange, FALSE);
+		//Set queue name & Create a temporary exclusive queue that doesn't auto_delete messages
+		list($this->name,,) = $this->channel->queue_declare("", FALSE, FALSE, TRUE, FALSE);
+		//Bind the temporary queue to the exchange
+		$this->channel->queue_bind($this->name, $this->exchange);
 	}
+
+	/**
+	 * Publish a message to the exchange
+	 * The state of the message will be updated according to the result of the operation.
+	 *
+	 * @param Message $message
+	 * @return void
+	 */
+	public function publish(Message $message) {
+		//emit_logs.php
+	}
+
+	/**
+	 * Begin subscribing to the queue until unsubscribed or until at least one of the conditions is met.
+	 *
+	 * This fires an event every time a message is received. That event will have the received message in it.
+	 *
+	 * @param integer $messageLimit
+	 * @param integer $timeout
+	 * @return void
+	 */
+	public function subscribe($messageLimit = NULL, $timeout = NULL) {
+		//receive_logs
+	}
+
+	public function unsubscribe() {
+
+	}
+
+	/**
+	 * from https://github.com/mgdm/Mosquitto-PHP
+	 * onLog       - set the logging callback
+	 * onSubscribe - set the subscribe callback
+	 * onMessage   - set teh callback fired when a message is received
+	 * qos         - num of msgs that can be inflight at once
+	 * publish     - publish a message to a broker
+	 * subscribe   - subscribe to a topic
+	 * unsubscribe - unsubscribe from a topic
+	 * loop        - The main network loop
+	 */
+
+	/**
+	 *
+	 * @param Message $message
+	 * @param String $queueName
+	 * @return void
+	 * @Flow\Signal
+	 */
+	protected function emitMessageReceivedFromQueue(Message $message, $queueName) {}
 }

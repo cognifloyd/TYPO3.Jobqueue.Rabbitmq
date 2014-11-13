@@ -32,7 +32,7 @@ abstract class AbstractRabbitmqQueue {
 	 *
 	 * @var string
 	 */
-	protected $exchange = '';
+	protected $exchange;
 
 	/**
 	 * This AMQP connection is the main RabbitMQ entry point.
@@ -59,8 +59,6 @@ abstract class AbstractRabbitmqQueue {
 	 * @param array  $options Connection options array
 	 */
 	public function __construct($name, array $options = array()) {
-		$this->name = $name;
-
 		// Awkward, but standard way of getting options with TYPO3.JobQueue.*
 		$clientOptions = isset($options['client']) ? $options['client'] : array();
 		$host = isset($clientOptions['host']) ? $clientOptions['host'] : 'localhost';

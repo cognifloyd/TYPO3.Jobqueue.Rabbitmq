@@ -37,6 +37,9 @@ class RabbitmqWorkQueue extends AbstractRabbitmqQueue implements QueueInterface 
 	 */
 	public function __construct($name, array $options = array()) {
 		parent::__construct($name,$options);
+		$this->name = $name;
+		$this->exchange = '';
+		//Create a durable non-exclusive queue that doesn't auto_delete messages
 		$this->channel->queue_declare($this->name, FALSE, TRUE, FALSE, FALSE);
 	}
 
