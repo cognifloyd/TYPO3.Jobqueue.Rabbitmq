@@ -11,6 +11,8 @@ namespace TYPO3\Jobqueue\Rabbitmq\Queue;
  * The TYPO3 project - inspiring people to share!                         *
  *                                                                        */
 
+use PhpAmqpLib\Exception\AMQPTimeoutException;
+use PhpAmqpLib\Message\AMQPMessage;
 use TYPO3\Flow\Annotations as Flow;
 use TYPO3\Jobqueue\Common\Queue\Message;
 use TYPO3\Jobqueue\Common\Queue\QueueInterface;
@@ -54,7 +56,13 @@ class RabbitmqPubSubQueue extends AbstractRabbitmqQueue {
 	 * @return void
 	 */
 	public function publish(Message $message) {
-		//emit_logs.php
+		$payload = $message->getPayload();
+		$amqpMessage = new AMQPMessage($payload);
+
+		//avoid race condition to make count work reliably
+		$this->channel->confirm_select();
+		$this->channel->basic_publish($amqpMessage, $this->exchange);
+		$message->setState(Message::STATE_PUBLISHED);
 	}
 
 	/**
@@ -62,12 +70,35 @@ class RabbitmqPubSubQueue extends AbstractRabbitmqQueue {
 	 *
 	 * This fires an event every time a message is received. That event will have the received message in it.
 	 *
+	 * This also returns all received messages in an array.
+	 *
 	 * @param integer $messageLimit
 	 * @param integer $timeout
-	 * @return void
+	 * @return array<Message> $messages Array of Messages received.
 	 */
 	public function subscribe($messageLimit = NULL, $timeout = NULL) {
-		//receive_logs
+		$messages = array();
+
+		$callback = function(AMQPMessage $amqpMessage) use (&$messages) {
+			$message = new Message($amqpMessage->body);
+			$message->setIdentifier($amqpMessage->delivery_info['delivery_tag']);
+			$messages[] = $message;
+			$this->emitMessageReceivedFromQueue($message, $this->exchange);
+		};
+
+		// include a qos?
+		$this->channel->basic_consume($this->name, '', FALSE, TRUE, FALSE, FALSE, $callback);
+
+		while(count($this->channel->callbacks)) {
+			try {
+				$this->channel->wait(null, false, is_null($timeout) ? 0 : $timeout);
+			} catch (AMQPTimeoutException $exception) {
+				return $messages;
+			}
+			if(!is_null($messageLimit) && count($messages) >= $messageLimit) return $messages;
+		}
+
+		return $messages;
 	}
 
 	public function unsubscribe() {
@@ -89,9 +120,9 @@ class RabbitmqPubSubQueue extends AbstractRabbitmqQueue {
 	/**
 	 *
 	 * @param Message $message
-	 * @param String $queueName
+	 * @param String $exchangeName The exchange that the message was published to
 	 * @return void
 	 * @Flow\Signal
 	 */
-	protected function emitMessageReceivedFromQueue(Message $message, $queueName) {}
+	protected function emitMessageReceivedFromQueue(Message $message, $exchangeName) {}
 }

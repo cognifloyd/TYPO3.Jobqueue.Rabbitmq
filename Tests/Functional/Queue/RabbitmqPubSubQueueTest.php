@@ -39,18 +39,9 @@ class RabbitmqPubSubQueueTest extends FunctionalTestCase {
 			$this->markTestSkipped('Rabbitmq is not configured (TYPO3.Jobqueue.Rabbitmq.testing.enabled != TRUE)');
 		}
 
-		$queueName = 'Test-queue';
-		$this->queue = new RabbitmqPubSubQueue($queueName, $settings['testing']);
-		$connectionOptions = $settings['testing']['client'];
-
-		//flush queue
-		$connection = new AMQPConnection($connectionOptions['host'], $connectionOptions['port'], $connectionOptions['username'], $connectionOptions['password'], $connectionOptions['vhost']);
-		$channel = $connection->channel();
-		$channel->queue_declare($queueName, FALSE, TRUE, FALSE, FALSE);
-		$channel->queue_purge($queueName);
-		$channel->close();
-		$connection->close();
-
+		$exchangeName = 'Test-exchange';
+		$this->queue = new RabbitmqPubSubQueue($exchangeName, $settings['testing']);
+		//With PubSub model, no Queue Flush is necessary, as queues are transient, and the test exchange isn't durable.
 	}
 
 	/**
@@ -61,5 +52,25 @@ class RabbitmqPubSubQueueTest extends FunctionalTestCase {
 		unset($this->queue);
 		parent::tearDown();
 	}
-}
 
+	/**
+	 * @test
+	 */
+	public function countReturnsZeroByDefault() {
+		$this->assertSame(0, $this->queue->count());
+	}
+
+	/**
+	 * @test
+	 */
+	public function countReturnsNumberOfReadyMessages() {
+		$message1 = new Message('First message');
+		$this->queue->publish($message1);
+
+		$message2 = new Message('Second message');
+		$this->queue->publish($message2);
+
+		$this->assertSame(2, $this->queue->count());
+	}
+
+}

@@ -78,4 +78,21 @@ abstract class AbstractRabbitmqQueue {
 		$this->channel->close();
 		$this->connection->close();
 	}
+
+	/**
+	 * Count messages in the queue
+	 *
+	 * Get a count of messages currently in the queue.
+	 *
+	 * @return integer The number of messages in the queue
+	 */
+	public function count() {
+		$queue_details = $this->channel->queue_declare($this->name, TRUE);
+		/*
+		 * $queue_details[0] is the Queue name
+		 * $queue_details[1] is the message count
+		 * $queue_details[2] is the consumer count
+		 */
+		return (integer) $queue_details[1];
+	}
 }

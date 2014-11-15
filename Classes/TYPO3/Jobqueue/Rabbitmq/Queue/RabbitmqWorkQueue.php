@@ -11,8 +11,6 @@ namespace TYPO3\Jobqueue\Rabbitmq\Queue;
  * The TYPO3 project - inspiring people to share!                         *
  *                                                                        */
 
-use PhpAmqpLib\Channel\AMQPChannel;
-use PhpAmqpLib\Connection\AMQPLazyConnection;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use TYPO3\Flow\Annotations as Flow;
@@ -190,23 +188,6 @@ class RabbitmqWorkQueue extends AbstractRabbitmqQueue implements QueueInterface 
 	}
 
 	/**
-	 * Count messages in the queue
-	 *
-	 * Get a count of messages currently in the queue.
-	 *
-	 * @return integer The number of messages in the queue
-	 */
-	public function count() {
-		$queue_details = $this->channel->queue_declare($this->name,true);
-		/*
-		 * $queue_details[0] is the Queue name
-		 * $queue_details[1] is the message count
-		 * $queue_details[2] is the consumer count
-		 */
-		return (integer) $queue_details[1];
-	}
-
-	/**
 	 * Encode a message
 	 *
 	 * Updates the original value property of the message to resemble the
@@ -248,10 +229,7 @@ class RabbitmqWorkQueue extends AbstractRabbitmqQueue implements QueueInterface 
 		/** @var Message $message */
 		$message = NULL;
 
-		/**
-		 * @param AMQPMessage $amqpMessage
-		 */
-		$callback = function($amqpMessage) use (&$message) {
+		$callback = function(AMQPMessage $amqpMessage) use (&$message) {
 			$message = $this->decodeMessage($amqpMessage->body);
 			$message->setIdentifier($amqpMessage->delivery_info['delivery_tag']);
 		};
